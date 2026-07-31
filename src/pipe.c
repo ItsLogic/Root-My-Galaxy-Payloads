@@ -971,24 +971,6 @@ int verify_p0_pipe_oracle_gate(void) {
         break;
       }
     }
-    if (getenv("FOPS_DIAG_FULLDUMP")) {
-      uint64_t words16[16];
-      memcpy(words16, page, sizeof(words16));
-      pr_info("p0 gate fulldump pipe=%zu "
-              "q0=%016llx q1=%016llx q2=%016llx q3=%016llx "
-              "q4=%016llx q5=%016llx q6=%016llx q7=%016llx "
-              "q8=%016llx q9=%016llx qA=%016llx qB=%016llx "
-              "qC=%016llx qD=%016llx qE=%016llx qF=%016llx\n",
-              pipe_index,
-              (unsigned long long)words16[0], (unsigned long long)words16[1],
-              (unsigned long long)words16[2], (unsigned long long)words16[3],
-              (unsigned long long)words16[4], (unsigned long long)words16[5],
-              (unsigned long long)words16[6], (unsigned long long)words16[7],
-              (unsigned long long)words16[8], (unsigned long long)words16[9],
-              (unsigned long long)words16[10], (unsigned long long)words16[11],
-              (unsigned long long)words16[12], (unsigned long long)words16[13],
-              (unsigned long long)words16[14], (unsigned long long)words16[15]);
-    }
     if (gate_offset != PAGE_SIZE) {
       gate_hits++;
       gate_pipe_index = (int)pipe_index;
@@ -1025,8 +1007,7 @@ int verify_p0_pipe_oracle_gate(void) {
   }
   pr_info("p0 pipe gate hits=%d changed=%d\n",
           gate_hits, changed_pages);
-  if ((gate_hits != 0 || changed_pages != 0) &&
-      !getenv("FOPS_DIAG_READBACK") && !getenv("FOPS_DIAG_PIPE_TARGET")) {
+  if (gate_hits != 0 || changed_pages != 0) {
     spawn_p0_ref_keeper(
         gate_hits == 1 && changed_pages == 0 ? gate_pipe_index : -1);
   }

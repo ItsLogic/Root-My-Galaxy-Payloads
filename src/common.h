@@ -424,7 +424,6 @@ int expand_p0_pipe_oracle(void);
 int verify_p0_pipe_oracle_gate(void);
 uintptr_t scan_p0_pipe_oracle(void);
 int restore_p0_oracle_pages(int fd);
-int run_p0_pipe_oracle_diagnostic(int fd);
 #endif
 
 int install_android_root(int fd);

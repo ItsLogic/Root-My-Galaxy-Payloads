@@ -356,13 +356,6 @@ int try_cfi_stage(void) {
 
   pr_info("cfi starting pipe physrw\n");
 
-#if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
-  if (getenv("P0_ORACLE_DIAG")) {
-    int diagnostic_ok = run_p0_pipe_oracle_diagnostic(fd);
-    fflush(NULL);
-    _exit(diagnostic_ok ? 0 : 1);
-  }
-#endif
 
   int installed = 0;
   pipe_stage_attempts = 0;

