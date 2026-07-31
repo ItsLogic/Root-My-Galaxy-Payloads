@@ -355,16 +355,22 @@ uintptr_t data_addr(uintptr_t image_addr) {
 
 /* Calibrated runtime direct-map alias for kernel image offsets.
  *
- * On q7mq the kernel image is physically loaded at 0x28000000 + va_slide
- * (phys 0x28000000 maps to direct-map VA 0xffffff8028000000).  So the
- * runtime direct-map alias of image offset O is:
- *   alias(O) = 0xffffff8028000000 + va_slide + O
- * where slide_p0_offset holds the CONVERTED va_slide (see
- * slide_commit_stext: the fingerprint X is converted as
- * va_slide = P0_ORACLE_PROBE_OFFSET - X). */
+ * Samsung (P0_ALIAS_INCLUDES_SLIDE=1): the image is physically loaded at
+ * P0_KERNEL_PHYS_LOAD + va_slide, so the runtime direct-map alias of
+ * image offset O is P0_DATA_ALIAS_CONST(KIMAGE_TEXT_BASE) + slide_p0_offset
+ * + O, where slide_p0_offset holds the CONVERTED va_slide (see
+ * slide_commit_stext).
+ *
+ * Pixel/GKI (P0_ALIAS_INCLUDES_SLIDE=0): the image is decompressed at a
+ * STATIC phys every boot, so the alias is constant:
+ * P0_DATA_ALIAS_CONST(KIMAGE_TEXT_BASE) + O (no slide). */
 uintptr_t runtime_image_alias(uintptr_t image_off) {
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
+#if P0_ALIAS_INCLUDES_SLIDE
   return P0_DATA_ALIAS_CONST(KIMAGE_TEXT_BASE) + slide_p0_offset + image_off;
+#else
+  return P0_DATA_ALIAS_CONST(KIMAGE_TEXT_BASE) + image_off;
+#endif
 #else
   (void)image_off;
   return 0;

