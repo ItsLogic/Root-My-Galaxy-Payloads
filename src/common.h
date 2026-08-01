@@ -63,7 +63,15 @@
 #endif
 #define MM_PARTIALS 5
 #define CORE 0
+#ifndef KSNITCH_COLLISIONS
 #define KSNITCH_COLLISIONS 4
+#endif
+#ifndef KERNELSNITCH_MTE
+/* KernelSnitch brute-forces the tagged mm_struct address when the kernel
+ * runs MTE (KASAN_HW_TAGS, e.g. GKI 6.1 on Pixel). Samsung kernels have
+ * MTE off. */
+#define KERNELSNITCH_MTE 0
+#endif
 
 #define ORDER3_SIZE (PAGE_SIZE << MM_ORDER)
 #define PIPE_CANDIDATE_PAGES 8
