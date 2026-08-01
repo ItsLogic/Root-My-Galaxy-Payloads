@@ -21,6 +21,7 @@ for p in $PKGS; do
 done
 
 iptables -D OUTPUT -j FOTA_BLOCK 2>/dev/null
+start update_engine 2>/dev/null
 iptables -F FOTA_BLOCK 2>/dev/null
 iptables -X FOTA_BLOCK 2>/dev/null
 

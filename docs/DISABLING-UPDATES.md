@@ -1,7 +1,8 @@
 # Disabling automatic updates (Samsung Tri Fold / q7mq) — findings
 
-Status: **method + scripts built; NOT yet applied on-device** (phone was
-disconnected when this was written). Verify with `--check` on first run.
+Status: **method + scripts built; NOT yet applied on-device** — verified
+read-only over ADB (2026-07-31), no disabler changes made. Apply with
+`disable_updates.sh` when ready and verify with `--check`.
 
 ## Why
 
@@ -24,53 +25,60 @@ What persists across reboots:
 |---|---|
 | `pm disable-user` (package restrictions in /data) | Yes |
 | `settings put …` (settings DB in /data) | Yes |
+| `stop update_engine` (native service) | Until next reboot |
 | iptables REJECT rules | **No** (flushed at boot; re-apply each root session) |
 
-## Samsung FOTA chain (One UI, Android 16 / F968NKSS6BZG3)
+## Confirmed update surface on F968NKSS6BZG3 (One UI 8.0, Android 16)
 
-| Package | Role |
-|---|---|
-| `com.wssyncmldm` | FOTA / DM client — downloads and applies updates |
-| `com.sec.android.soagent` | software update agent |
-| `com.sec.android.systemupdate` | update installer |
-| `com.samsung.sdm` | Samsung Device Management — FOTA orchestration (One UI 6+) |
-| `com.samsung.sdm.sts` | service tag system (sdm companion) |
+Verified over ADB, 2026-07-31 (read-only):
 
-Plus a discovery fallback in the script: grep `pm list packages` for
-`wssync|soagent|systemupdate|fota|samsung\.sdm` and disable anything else
-that matches.
+| Component | Package / path | Version | Role |
+|---|---|---|---|
+| FotaAgent | `com.wssyncmldm` | 4.5.18 | downloader/installer — **the one to kill** |
+| SOAgent | `com.sec.android.soagent` | 7.7.01 | update agent |
+| Update Center | `com.samsung.android.app.updatecenter` | 3.9.06 | update UI/notifications |
+| update_engine | `/system/bin/update_engine` (native, runs as root) | — | AOSP seamless installer; **cannot pm-disable**; `stop update_engine` per boot |
 
-## FOTA endpoints (blocked with iptables while rooted)
+NOT present on this build (One UI 6-era names — kept in the script, skipped
+when absent): `com.sec.android.systemupdate`, `com.samsung.sdm`,
+`com.samsung.sdm.sts`.
 
-```
-fota-cloud-dn.samsungmobile.com
-fota-ss.samsungmobile.com
-dm-fota.samsungmobile.com
-fota.samsungmobile.com
-```
+NOT update-related (leave alone): `com.ims.dm` (OpenImsDm — carrier IMS),
+`com.samsung.android.mdm` (MDMApp — enterprise), Knox cloudmdm,
+`com.google.android.configupdater` (Google config/Mainline).
 
-Blocked via **SNI string match** — `iptables -A FOTA_BLOCK -m string
---string "$host" --algo bm -j REJECT` — because the TLS ClientHello SNI is
-plaintext, this catches HTTPS connections even when the hostnames resolve
-to CDN IPs. Rules live in a dedicated `FOTA_BLOCK` chain inserted into
-`OUTPUT`. They die on reboot; Layer 1 (pm-disable) makes that harmless.
+## FOTA endpoints — the classic list is stale
 
-## Settings flipped (persistent)
+As of this check, **none of the classic domains resolve** (workstation and
+device DNS): `fota-cloud-dn.samsungmobile.com`, `fota-ss…`, `dm-fota…`,
+`fota.samsungmobile.com`, `ota.samsungmobile.com`, `swupdate.samsungmobile.com`
+→ all NXDOMAIN. One UI 8-era builds moved endpoints. The script keeps the
+old names as a legacy net and additionally **harvests the real server URLs
+from FotaAgent's private data** (`/data/user_de/0/com.wssyncmldm/`) at root
+time, adding SNI string-match rules for any `*.samsungmobile.com` /
+`*.samsungcloud.com` host found there.
 
-```
-settings put global  software_update_auto_download 0
-settings put secure  software_update_auto_download 0
-settings put system  auto_download 0
-settings put system  auto_update 0
-```
-(Keys that don't exist on a build are silently ignored.)
+SNI technique: `iptables -A FOTA_BLOCK -m string --string "$host" --algo bm
+-j REJECT` — the TLS ClientHello SNI is plaintext, so this catches HTTPS
+connections regardless of CDN IP churn. Rules live in a dedicated
+`FOTA_BLOCK` chain inserted into `OUTPUT`; they die on reboot (Layer 1
+makes that harmless).
+
+## Settings keys — absent on this build
+
+`software_update_auto_download`, `auto_download`, `auto_update` are all
+**null** in global/system/secure. The real auto-download toggle lives in
+FotaAgent's private prefs (root-only path) — moot once the agent is
+disabled. The script's `settings put` lines are harmless no-ops kept for
+older One UI builds.
 
 ## Files
 
 - `tools/disable_updates.sh` — disable + check mode
   (`--check` prints each package's state)
-- `tools/enable_updates.sh` — re-enable + remove iptables rules
-- Both committed on `q7mq-support` (`d023c62`), POSIX sh, `sh -n` clean.
+- `tools/enable_updates.sh` — re-enable, remove iptables rules,
+  `start update_engine`
+- Committed on `q7mq-support`, POSIX sh, `sh -n` clean.
 
 ## Usage
 
@@ -93,9 +101,9 @@ adb shell "$HELPER /system/bin/sh /data/local/tmp/enable_updates.sh"
 - The manual Settings → Software update button fails quietly.
 - Google Play system updates (Mainline APEX) do not touch the Samsung
   kernel; irrelevant to the exploit.
-- iptables rules need re-application after each reboot once rooted; the
-  natural automation hook is the app running `disable_updates.sh` through
-  the daemon right after each successful root.
+- `stop update_engine` + iptables rules need re-application after each
+  reboot once rooted; the natural automation hook is the app running
+  `disable_updates.sh` through the daemon right after each successful root.
 
 ## Pixel 7 follow-up (TODO when the Pixel is connected)
 
