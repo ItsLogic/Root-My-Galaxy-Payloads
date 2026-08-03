@@ -1,15 +1,23 @@
 # Samsung KernelSU late-load builds
 
-The files in this directory are built from KernelSU `v3.2.5`, commit
-`b0bc817b4e966aa6aa830834eaf6ef765d821d40`. They are not interchangeable
-between KMIs.
+The `android15-6.6` pair (the S25U / Tri Fold / S938N family) is built from
+**ReSukiSU** (`https://github.com/ReSukiSU/ReSukiSU`, commit
+`59c99fd` "docs: notice switch to Weblate") plus the Samsung
+KDP/RKP/DEFEX adaptation in
+[`patches/ReSukiSU-samsung-kdp-rkp-defex.patch`](patches/ReSukiSU-samsung-kdp-rkp-defex.patch).
+ReSukiSU is the SukiSU-Ultra fork used by
+[GhostLock-for-OnePlus](https://github.com/p2p3p/GhostLock-for-OnePlus); the
+manager APK (`com.resukisu.resukisu`, or any KernelSU-compatible manager such
+as `me.weishu.kernelsu`) connects to the same kernel interface. The remaining
+`android14-6.1` / `android12-5.10` pairs are still stock KernelSU `v3.2.5`
+(commit `b0bc817b4e966aa6aa830834eaf6ef765d821d40`). Artifacts are not
+interchangeable between KMIs.
 
 ## Versioned artifacts
 
 | File | Target | KMI | Purpose |
-| --- | --- | --- | --- |
-| `android15-6.6_kernelsu-s25u-kdp.ko` | `SM-S938N`, `S938NKSUACZF1` | `android15-6.6` | Standalone reference module from the previously deployed S25U build |
-| `ksud-s25u-kdp` | `SM-S938N`, `S938NKSUACZF1` | `android15-6.6` | Late-load binary embedding the 6.6 module |
+| `android15-6.6_kernelsu-s25u-kdp.ko` | `SM-S938N`, `SM-F968N` (q7mq), `S938NKSUACZF1` | `android15-6.6` | ReSukiSU module with Samsung KDP/RKP/DEFEX (`ReSukiSU-samsung-kdp-rkp-defex.patch`) |
+| `ksud-s25u-kdp` | Same 6.6 targets | `android15-6.6` | ReSukiSU ksud late-load binary embedding the 6.6 module |
 | `android14-6.1_kernelsu-e3q-S928USQS6DZF2-kdp.ko` | `SM-S928U/SM-S928U1`, `S928USQS6DZF2` | `android14-6.1` | Exact E3Q module with target `vermagic`, audited for manual relocation |
 | `ksud-e3q-S928USQS6DZF2-kdp` | Same exact E3Q build | `android14-6.1` | Late-load binary embedding the E3Q module |
 | `android14-6.1_kernelsu-samsung-kdp.ko` | `SM-S721N` `S721NKSSCDZF3`; `SM-S921B` `S921BXXSFDZF2` | `android14-6.1` | Standalone Samsung KDP/RKP/DEFEX module with target `vermagic` |
@@ -99,7 +107,71 @@ undefined imports were checked against the recovered A15 `vmlinux`; the KDP,
 DEFEX, syscall-table, and kprobe symbols resolved by name were checked
 separately.
 
-## Rebuild
+## Rebuild the 6.6 (ReSukiSU) artifact
+
+The `android15-6.6` pair is built from ReSukiSU (SukiSU-Ultra fork) with the
+Samsung KDP/RKP/DEFEX adaptation ported on top. Apply the patch to a clean
+ReSukiSU checkout:
+
+```sh
+git clone https://github.com/ReSukiSU/ReSukiSU.git
+cd ReSukiSU
+git apply ReSukiSU-samsung-kdp-rkp-defex.patch
+```
+
+The patch adds `compat/samsung_kdp.c` / `compat/samsung_defex.c` (runtime
+resolution of `prepare_ro_creds`, `kdp_assign_pgd`, `kdp_usecount_dec_and_test`,
+`get_task_creds` / `set_task_creds` via kallsyms), wires them into
+`core/init.c` and `policy/app_profile.c`, makes the syscall-table hook return
+an error status so the RKP-protected write failure is detected, and adds the
+setresuid kretprobe + sucompat kprobes fallback in
+`hook/syscall_hook_manager.c` when the dispatcher cannot be installed. It also
+fixes `ksu_su_compat_enabled` for the static-key variant
+(`KSU_COMPAT_USE_STATIC_KEY`, unconditional on GKI 6.6) via the new
+`ksu_su_compat_enabled_check()` helper in `feature/sucompat.h`, and splits the
+ksud install into `stage_daemon_from()` / `finish_install()` so the daemon is
+renamed into `/data/adb/ksud` before the module load changes the loader's
+security context.
+
+Build the module with the 6.6 DDK container (same image family as the stock
+6.6 build; the late loader rewrites vermagic at load time, so the DDK's
+`6.6.127-4k` release string is fine):
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace/kernel \
+  ghcr.io/ylarod/ddk-min:android15-6.6-20260313 \
+  bash -c 'CONFIG_KSU=m \
+    CONFIG_KSU_MULTI_MANAGER_SUPPORT=y \
+    CONFIG_KSU_TRACEPOINT_HOOK=y \
+    CONFIG_KSU_SAMSUNG_KDP=y \
+    CONFIG_KSU_SAMSUNG_RKP=y \
+    CONFIG_KSU_SAMSUNG_DEFEX=y \
+    CC=clang make'
+```
+
+`check_symbol` must report zero missing symbols (228 undefined imports, all
+resolved against the DDK vmlinux; the Samsung functions are resolved at
+runtime and are not in the undefined list).
+
+Copy the stripped module to
+`userspace/ksud/bin/aarch64/android15-6.6_kernelsu.ko`, then build ksud for
+`aarch64-linux-android` (nightly toolchain, NDK r28+):
+
+```sh
+export NDK=/path/to/ndk/toolchains/llvm/prebuilt/linux-x86_64
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$NDK/bin/aarch64-linux-android35-clang
+export CC_aarch64_linux_android=$NDK/bin/aarch64-linux-android35-clang
+export AR_aarch64_linux_android=$NDK/bin/llvm-ar
+export LIBCLANG_PATH=$NDK/lib
+cd userspace/ksud && cargo +nightly build --release --target aarch64-linux-android
+```
+
+The resulting binary is `ksud-s25u-kdp` (the support feed URL is unchanged;
+the on-device path `/data/local/tmp/ksud-s25u-kdp` used by `su_daemon.c` is
+unchanged). Its `late-load --kmi android15-6.6 --package-name <manager>` CLI
+matches the existing su_daemon invocation.
+
+## Rebuild (stock v3.2.5 artifacts: 6.1 / 5.10)
 
 Apply the patch to a clean v3.2.5 checkout:
 

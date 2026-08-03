@@ -71,9 +71,14 @@ build-specific and must not be reused across profiles.
 
 ## KernelSU
 
-Reuses `kernelsu/ksud-s25u-kdp` (`android15-6.6`, 6407096 bytes) — identical
-to the `pa3q` profiles. The kdp late-load resolves symbols at runtime against
-the same GKI kernel, so no separate module build is required.
+Reuses `kernelsu/ksud-s25u-kdp` (`android15-6.6`, 6854464 bytes) — identical
+to the `pa3q` profiles. As of the ReSukiSU swap, this is a **ReSukiSU**
+(SukiSU-Ultra fork) late-load binary embedding the ReSukiSU module with the
+ported Samsung KDP/RKP/DEFEX adaptations (see
+`kernelsu/README.md`); the on-device path `/data/local/tmp/ksud-s25u-kdp` and
+the `late-load --kmi android15-6.6 --package-name <manager>` invocation used
+by `su_daemon.c` are unchanged. Any KernelSU-compatible manager
+(`com.resukisu.resukisu`, `me.weishu.kernelsu`, …) can connect.
 
 ## Build
 
